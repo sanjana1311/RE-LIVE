@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RE:LIVE - Story to Webtoon</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: {
+                50: '#fafaf9',  // Warm off-white
+                100: '#f5f5f4', // Stone 100
+                200: '#e7e5e4', // Stone 200
+                500: '#78716c', // Stone 500 (Medium Gray)
+                600: '#44403c', // Stone 700 (Dark Charcoal)
+                700: '#1c1917', // Stone 900 (Near Black)
+                800: '#292524',
+                900: '#0c0a09', // Black
+              }
+            },
+            fontFamily: {
+              comic: ['Comic Sans MS', 'Chalkboard SE', 'sans-serif'],
+              serif: ['Playfair Display', 'Merriweather', 'serif'],
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Playfair+Display:wght@700&display=swap');
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #fafaf9; /* Stone 50 */
+        color: #1c1917; /* Stone 900 */
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
