@@ -1,7 +1,11 @@
 
 import React from 'react';
 
-const Header: React.FC = () => {
+interface Props {
+  onMemoriesClick?: () => void;
+}
+
+const Header: React.FC<Props> = ({ onMemoriesClick }) => {
   return (
     <header className="w-full py-6 px-4 flex items-center justify-between bg-white/80 backdrop-blur-md sticky top-0 z-50 border-b border-stone-200">
       <div className="flex items-center gap-3">
@@ -38,8 +42,15 @@ const Header: React.FC = () => {
           RE:LIVE
         </h1>
       </div>
-      <div className="flex items-center gap-2 text-xs font-medium text-stone-400 uppercase tracking-widest">
-        <span>AI Powered Studio</span>
+      <div className="flex items-center gap-2">
+        {onMemoriesClick && (
+            <button 
+                onClick={onMemoriesClick}
+                className="text-xs font-bold text-stone-500 hover:text-stone-900 uppercase tracking-widest px-4 py-2 rounded-full hover:bg-stone-100 transition-all"
+            >
+                Memories
+            </button>
+        )}
       </div>
     </header>
   );

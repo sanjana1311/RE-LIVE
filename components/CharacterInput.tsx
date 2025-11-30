@@ -1,3 +1,4 @@
+
 import React, { useRef, useState } from 'react';
 import { Plus, X, Settings2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Character, ColorPalette } from '../types';
@@ -7,16 +8,76 @@ interface Props {
   setCharacters: React.Dispatch<React.SetStateAction<Character[]>>;
 }
 
-const OUTFIT_PRESETS = ["Casual Hoodie", "School Uniform", "Cyberpunk Gear", "Fantasy Armor", "Business Suit", "Summer Dress", "Sportswear", "Traditional Robe"];
+const OUTFIT_PRESETS = ["Casual Hoodie", "School Uniform", "Cyberpunk Gear", "Fantasy Armor", "Business Suit", "Summer Dress", "Sportswear", "Traditional Robe", "Formal Wedding Attire", "Traditional Indian", "Pajamas/Sleepwear"];
 const HAIR_PRESETS = ["Short & Messy", "Long & Flowing", "Bob Cut", "Spiky Anime", "Ponytail", "Braided", "Bald", "Undercut"];
-const ACCESSORY_PRESETS = ["Glasses", "Scar", "Hat", "Headphones", "Earrings", "Bandage", "Mask", "Cat Ears"];
 const PALETTE_PRESETS: ColorPalette[] = ["Soft", "Bright", "Neutral", "Dark"];
+
+// Comprehensive list of daily accessories
+const DAILY_ACCESSORIES = [
+    // Eyewear
+    "Prescription Glasses", "Sunglasses", "Reading Glasses", "Round Frames", "Cat-Eye Glasses",
+    // Headwear
+    "Baseball Cap", "Beanie", "Wide-brim Hat", "Bucket Hat", "Headband", "Bandana", "Hijab", "Turban", "Hair Clip", "Scrunchie",
+    // Jewelry
+    "Gold Necklace", "Silver Chain", "Pearl Necklace", "Choker", "Pendant",
+    "Stud Earrings", "Hoop Earrings", "Dangle Earrings",
+    "Wristwatch", "Smart Watch", "Bracelet", "Bangle", "Ring", "Nose Piercing", "Septum Ring",
+    // Tech & Other
+    "Over-ear Headphones", "Wireless Earbuds", "Scarf", "Face Mask", "Bow Tie", "Tie", "Bindi"
+].sort();
 
 const CharacterInput: React.FC<Props> = ({ characters, setCharacters }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Helper to resize and compress images to avoid "Payload Too Large" API errors
+  const processImage = (file: File): Promise<{ base64: string; mimeType: string }> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const MAX_SIZE = 1024; // Limit max dimension to 1024px
+
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+             ctx.drawImage(img, 0, 0, width, height);
+             // Always convert to JPEG for consistent handling and better compression
+             const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+             resolve({
+               base64: dataUrl.split(',')[1],
+               mimeType: 'image/jpeg'
+             });
+          } else {
+             reject(new Error("Canvas context failed"));
+          }
+        };
+        img.onerror = reject;
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -25,23 +86,26 @@ const CharacterInput: React.FC<Props> = ({ characters, setCharacters }) => {
       return;
     }
 
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const base64String = reader.result as string;
-      const rawBase64 = base64String.split(',')[1]; 
-      
-      const newChar: Character = {
-        id: Date.now().toString(),
-        name: `Person ${characters.length + 1}`,
-        imageBase64: rawBase64,
-        outfit: undefined, 
-        hairStyle: undefined, 
-        accessories: [],
-        colorPalette: undefined 
-      };
-      setCharacters([...characters, newChar]);
-    };
-    reader.readAsDataURL(file);
+    try {
+        const { base64, mimeType } = await processImage(file);
+        
+        const newChar: Character = {
+          id: Date.now().toString(),
+          name: `Person ${characters.length + 1}`,
+          imageBase64: base64,
+          mimeType: mimeType,
+          outfit: undefined, 
+          hairStyle: undefined, 
+          accessories: [],
+          colorPalette: undefined,
+          description: ''
+        };
+        setCharacters([...characters, newChar]);
+    } catch (err) {
+        console.error("Error processing image", err);
+        alert("Failed to process image. Please try another.");
+    }
+
     e.target.value = '';
   };
 
@@ -55,13 +119,19 @@ const CharacterInput: React.FC<Props> = ({ characters, setCharacters }) => {
     setCharacters(newChars);
   };
 
-  const toggleAccessory = (index: number, accessory: string) => {
+  const addAccessory = (index: number, accessory: string) => {
+    if (!accessory) return;
     const char = characters[index];
     const current = char.accessories || [];
-    const newAccessories = current.includes(accessory)
-        ? current.filter(a => a !== accessory)
-        : [...current, accessory];
-    updateCharacter(index, 'accessories', newAccessories);
+    if (!current.includes(accessory)) {
+        updateCharacter(index, 'accessories', [...current, accessory]);
+    }
+  };
+
+  const removeAccessory = (index: number, accessory: string) => {
+    const char = characters[index];
+    const current = char.accessories || [];
+    updateCharacter(index, 'accessories', current.filter(a => a !== accessory));
   };
 
   const toggleExpand = (id: string) => {
@@ -93,7 +163,7 @@ const CharacterInput: React.FC<Props> = ({ characters, setCharacters }) => {
                 {/* Avatar */}
                 <div className="w-14 h-14 flex-shrink-0 rounded bg-stone-100 border border-stone-100 overflow-hidden">
                     <img 
-                        src={`data:image/jpeg;base64,${char.imageBase64}`} 
+                        src={`data:${char.mimeType || 'image/jpeg'};base64,${char.imageBase64}`} 
                         alt="Character" 
                         className="w-full h-full object-cover grayscale-[0.1]"
                     />
@@ -115,7 +185,7 @@ const CharacterInput: React.FC<Props> = ({ characters, setCharacters }) => {
                         className="text-[10px] text-stone-500 font-semibold flex items-center gap-1 mt-1 hover:text-stone-800 w-fit uppercase tracking-wide"
                     >
                         <Settings2 size={10} />
-                        {expandedId === char.id ? "Close Options" : "Customize Look"}
+                        {expandedId === char.id ? "Close Options" : "Add Details (Optional)"}
                         {expandedId === char.id ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                     </button>
                 </div>
@@ -126,6 +196,19 @@ const CharacterInput: React.FC<Props> = ({ characters, setCharacters }) => {
                 <div className="px-4 pb-6 pt-2 bg-stone-50/50 border-t border-stone-100 animate-in slide-in-from-top-2 duration-200">
                     <div className="grid grid-cols-1 gap-5 mt-2">
                         
+                        {/* Description Text Area */}
+                        <div>
+                             <label className="text-[10px] uppercase tracking-wider text-stone-400 font-bold mb-2 block">
+                                Additional Details (Recommended)
+                             </label>
+                             <textarea 
+                                className="w-full bg-white border border-stone-200 rounded text-xs text-stone-700 p-3 focus:border-stone-400 outline-none transition-all resize-none h-20"
+                                placeholder="e.g. Ethnicity (Indian, Korean, etc.), specific vibe, or important details."
+                                value={char.description || ''}
+                                onChange={(e) => updateCharacter(idx, 'description', e.target.value)}
+                             />
+                        </div>
+
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="text-[10px] uppercase tracking-wider text-stone-400 font-bold mb-1 block">Hair Override</label>
@@ -145,32 +228,50 @@ const CharacterInput: React.FC<Props> = ({ characters, setCharacters }) => {
                                     value={char.outfit || ""}
                                     onChange={(e) => updateCharacter(idx, 'outfit', e.target.value || undefined)}
                                 >
-                                    <option value="">Matches Photo (Default)</option>
+                                    <option value="">Auto (Adapts to Scene)</option>
                                     {OUTFIT_PRESETS.map(o => <option key={o} value={o}>{o}</option>)}
                                 </select>
                             </div>
                         </div>
                         
+                        {/* Daily Accessories Dropdown */}
                         <div>
                             <label className="text-[10px] uppercase tracking-wider text-stone-400 font-bold mb-2 block">Accessories</label>
-                            <div className="flex flex-wrap gap-2">
-                                {ACCESSORY_PRESETS.map((acc) => {
-                                    const isSelected = char.accessories?.includes(acc);
-                                    return (
-                                        <button
-                                            key={acc}
-                                            onClick={() => toggleAccessory(idx, acc)}
-                                            className={`
-                                                text-[10px] px-3 py-1.5 rounded-full border transition-all
-                                                ${isSelected 
-                                                    ? 'bg-stone-800 border-stone-800 text-white' 
-                                                    : 'bg-white border-stone-200 text-stone-500 hover:border-stone-300 hover:bg-stone-50'}
-                                            `}
+                            
+                            <select 
+                                className="w-full bg-white border border-stone-200 rounded text-xs text-stone-700 p-2.5 focus:border-stone-400 outline-none transition-all cursor-pointer mb-2"
+                                onChange={(e) => {
+                                    addAccessory(idx, e.target.value);
+                                    e.target.value = ""; // Reset dropdown
+                                }}
+                            >
+                                <option value="">+ Select Accessory</option>
+                                {DAILY_ACCESSORIES.map(acc => (
+                                    <option key={acc} value={acc} disabled={char.accessories.includes(acc)}>
+                                        {acc}
+                                    </option>
+                                ))}
+                            </select>
+
+                            {/* Selected Accessories Tags */}
+                            <div className="flex flex-wrap gap-2 min-h-[24px]">
+                                {char.accessories?.map((acc) => (
+                                    <span 
+                                        key={acc}
+                                        className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-stone-800 text-white font-medium"
+                                    >
+                                        {acc}
+                                        <button 
+                                            onClick={() => removeAccessory(idx, acc)}
+                                            className="hover:text-red-300 transition-colors ml-1"
                                         >
-                                            {acc}
+                                            <X size={10} />
                                         </button>
-                                    );
-                                })}
+                                    </span>
+                                ))}
+                                {!char.accessories?.length && (
+                                    <span className="text-[10px] text-stone-400 italic px-1">None selected</span>
+                                )}
                             </div>
                         </div>
 

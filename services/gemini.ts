@@ -6,187 +6,370 @@ const API_KEY = process.env.API_KEY || '';
 
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// --- Helper: Construct Character Identity Block ---
-const constructCharacterIdentityBlock = (char: Character): string => {
-  const outfitSpec = char.outfit ? `FIXED OUTFIT: ${char.outfit}` : 'OUTFIT: Change based on scene context (casual/formal/work) but keep style consistent.';
-  const hairSpec = char.hairStyle ? `FIXED HAIR: ${char.hairStyle}` : 'HAIR: Match Reference Image exactly.';
-  
-  return `
-    CHARACTER IDENTITY BLOCK (CIB) - STRICT ADHERENCE REQUIRED
-    ---------------------------------------------------------
-    NAME: ${char.name}
-    FACE & IDENTITY: 
-      - Use the attached reference image as the GROUND TRUTH for facial structure, eye shape, nose, and jawline.
-      - Do NOT alter ethnicity or key facial features.
-      - Do NOT "beautify" or genericize the face. It must look like the specific person in the photo.
-    
-    APPEARANCE RULES:
-      - ${hairSpec}
-      - ${outfitSpec}
-      - ACCESSORIES: ${char.accessories.join(', ') || 'None'}
-    ---------------------------------------------------------
-  `;
-};
+// Helper: Retry mechanism for 429 errors
+async function retryWithBackoff<T>(fn: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    // Check for Rate Limit (429) or Service Unavailable (503)
+    if (retries > 0 && (error.status === 429 || error.message?.includes('429') || error.status === 503)) {
+      console.warn(`API Rate Limit hit. Retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryWithBackoff(fn, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+}
 
-// --- Script Generation ---
+// --- Script & CIB Generation (The Director) ---
 
 export const generateWebtoonScript = async (
   story: string, 
-  characters: Character[]
-): Promise<{ title: string; panels: PanelScript[] }> => {
+  characters: Character[],
+  artStyle: ArtStyle
+): Promise<{ title: string; panels: PanelScript[]; characterIdentityBlocks: Record<string, string> }> => {
   
-  // We tell the script writer that outfit is 'variable' if not strictly defined by the user
-  const characterDescriptions = characters.map(c => 
-    `${c.name} (Hair: ${c.hairStyle || 'consistent with photo'}, Outfit: ${c.outfit || 'variable based on story context'})`
-  ).join("; ");
+  return retryWithBackoff(async () => {
+    // Prepare input parts: Text Prompt + Character Images
+    const inputParts: any[] = [];
 
-  const names = characters.length > 0 ? characterDescriptions : "the protagonist";
-  
-  const prompt = `
-    You are a master Webtoon Director and Screenwriter.
-    Your goal is to turn the user's story into a VISUALLY coherent, chronologically smooth Webtoon episode.
+    // 1. Add Character Images so the Director can see them to write the CIB
+    characters.forEach(char => {
+      inputParts.push({
+        inlineData: {
+          mimeType: char.mimeType || "image/jpeg",
+          data: char.imageBase64
+        }
+      });
+      inputParts.push({ text: `REFERENCE IMAGE FOR: ${char.name}. Description/Notes: ${char.description || "None"}` });
+    });
 
-    User Story: "${story}"
-    Characters: ${names}.
+    // 2. Add the Strict Director Prompt
+    const prompt = `
+      You are the "Relive" Webtoon Director AI.
+      Your GOAL is to create an EMOTIONAL MASTERPIECE.
+      Do not just list events. Make the user CRY (from sadness or joy).
+      Focus on the internal journey, the struggle, and the ultimate release.
 
-    CRITICAL INSTRUCTIONS:
-    1. **PANEL COUNT IS DYNAMIC:** Do NOT stick to a small number of panels. Determine the optimal number of panels to tell this story fully and emotionally (Minimum 6, Maximum 25). 
-       - If the story is detailed, use MORE panels to let moments breathe.
-       - Do not rush the pacing.
-    
-    2. **REAL-WORLD LOCATION ACCURACY:** 
-       - If the user mentions a real place (e.g., "Tempe Town Lake", "Times Square", "Kyoto"), do NOT just describe a generic version.
-       - You MUST describe specific visual landmarks in the 'visualDescription'.
-       - Example: "Tempe Town Lake" -> Describe "The distinct modern Mill Avenue bridges spanning the water, with arid desert mountains in the distant background and reflective water."
+      STORY: "${story}"
+      ART STYLE: ${artStyle}
+      CHARACTERS PROVIDED: ${characters.map(c => c.name).join(', ')}
 
-    3. **Translate "Jobs" to "Cinematic Actions":** If the user mentions a job or activity, make it visual.
-       - Example: "Working at Tesla" -> Show the character inside a sleek autonomous car, hands off the wheel, looking cool.
+      ===========================================================
+      PHASE 1: CHARACTER IDENTITY BLOCK (CIB) GENERATION - THE ANCHOR
+      ===========================================================
+      Analyze the provided images AND the character names/descriptions.
+      For each character, write a "Character Identity Block" (CIB).
+      
+      This CIB is the FIXED TEXTUAL IDENTITY. It must be exhaustive.
+      
+      CRITICAL: You must explicitly define and include in the text:
+      - ETHNICITY: (Inferred from Name + Image + Description)
+      - SKIN TONE: (Describe precise shade, e.g., "Warm beige", "Deep cool brown", "Pale olive")
+      - FACE SHAPE: (e.g. "Angular", "Round", "Oval", "Square")
+      - JAWLINE & CHIN: (e.g. "Sharp/Chiseled", "Soft", "Pointed", "Cleft chin")
+      - NOSE STRUCTURE: (e.g. "Button", "Aquiline", "Flat", "High bridge")
+      - EYE SHAPE & SPACING: (e.g. "Almond", "Round", "Monolid", "Wide-set")
+      - EYEBROW SHAPE: (e.g. "Thick and straight", "Thin and arched")
+      - LIP SHAPE: (e.g. "Full", "Thin upper lip", "Cupid's bow")
+      - HAIR DETAILS: Length, Texture, Color, Parting style.
+      - UNIQUE MARKERS: (Moles, freckles, glasses, scars, dimples)
+      
+      CRITICAL: **DO NOT INCLUDE CLOTHING IN THIS BLOCK.** 
+      Clothing must be dynamic and defined per panel in Phase 3.
+      
+      *User Overrides:*
+      ${characters.map(c => `- ${c.name}: ${c.hairStyle ? 'FORCE HAIR TO: '+c.hairStyle : 'KEEP HAIR EXACTLY AS PHOTO'}, ${c.outfit ? 'FORCE OUTFIT TO: '+c.outfit : 'AUTO: ADAPT OUTFIT TO SCENE'}, Context: ${c.description || ''}`).join('\n')}
 
-    4. **Chronological Flow:** Ensure Panel 1 leads logically to Panel 2.
+      The CIB text should be a single, dense, descriptive paragraph focusing ONLY on physical features.
 
-    Return a JSON object with a 'title' and an array of 'panels'.
-    For each panel, provide:
-    - panelId: Integer.
-    - visualDescription: A highly detailed prompt for an image generator. 
-      *IMPORTANT*: Focus on the SETTING and the LIGHTING. 
-      *CLOTHING*: If the user has a set outfit, use it. If not, ensure the outfit makes sense for the *action* (e.g. sleek jacket for the car scene).
-    - dialogue: Short, punchy dialogue bubbles.
-    - speaker: Character name.
-    - narration: Text box for context.
-  `;
+      ===========================================================
+      PHASE 2: SCENE ARCHETYPES & VISUAL LOGIC
+      ===========================================================
+      You must map story beats to specific visual archetypes. DO NOT GUESS.
 
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          panels: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                panelId: { type: Type.INTEGER },
-                visualDescription: { type: Type.STRING },
-                dialogue: { type: Type.STRING },
-                speaker: { type: Type.STRING },
-                narration: { type: Type.STRING },
+      1. **REJECTION / BAD NEWS / STRUGGLE (Make it hurt):**
+         - VISUAL: Looking at a laptop/phone screen with a crushed expression. Or sitting on floor, head in hands.
+         - SETTING: **Bedroom (Dimly lit, cluttered with papers/books), Dark Cafe, or Lonely Park Bench**.
+         - CONSTRAINT: **NO FOOD OR DIRTY DISHES.** The mess should be intellectual (papers, notes) or emotional (unmade bed), not gross/food-related.
+         - ATMOSPHERE: Dim lighting, isolation, rain, or harsh monitor glow.
+
+      2. **INTERNSHIP / WORKING (The Grind):**
+         - VISUAL: Actively working (Typing, Soldering, Analyzing). Focus faces.
+         - SETTING: **Lab, Office Cubicle, Tech Bench**. NOT holding a phone. NOT just walking.
+         - NOTE: If they are working at a specific company (e.g., Infineon, Tesla), show that environment (Logos, machinery).
+
+      3. **CONTRACT SIGNING / OFFER ACCEPTANCE (The Relief):**
+         - VISUAL: Pen in hand, paper on desk, or shaking hands. Tears of joy are okay here.
+         - OUTFIT: **Smart Casual / Business Professional** (Blazer, Shirt).
+         - SETTING: HR Office or sleek desk.
+
+      4. **UNIVERSITY INTERNSHIP (e.g., ASU Job):**
+         - VISUAL: Working at a desk or lab on campus.
+         - PRIORITY: **WORK > CAMPUS**. Show them working, not walking on the lawn.
+         
+      5. **AGE & TIMELINE CONSISTENCY (MANDATORY):**
+         - If story mentions "Childhood" -> Describe character as Child/Teen.
+         - If "College" -> Young Adult (approx 20s).
+         - If "Present" -> Current Age (based on photo).
+         
+      6. **UNIVERSITY BRANDING LOOKUP:**
+         - If "ASU" (Arizona State) -> Gown: Maroon with Gold Stole. Background: Palm trees, desert mountains.
+         - If "NYU" -> Gown: Violet. Background: Washington Square Park.
+         - If "Oxford/Cambridge" -> Subfusc/Robes.
+
+      ===========================================================
+      PHASE 2.5: EMOTIONAL AMPLIFICATION (THE "CRY" FACTOR)
+      ===========================================================
+      - **SAD MOMENTS:** Focus on small details. The shaking hand. The empty room. The silence. Narration should be internal monologue (e.g., "I wondered if I was enough.").
+      - **HAPPY MOMENTS:** Focus on scale and light. The world opening up. The sun hitting their face. Narration should feel like a deep breath release (e.g., "Finally. It was real.").
+      - **USE SILENCE:** For the biggest emotional peak (good or bad), use NO DIALOGUE. Let the image carry the weight.
+      
+      SPECIAL RULES FOR FIRST & LAST PANELS:
+      - **PANEL 1 (The Hook):** Conceptual Montage if appropriate. Don't just show them sitting. Show the *weight* of the situation (e.g. surrounded by floating rejection letters, or chaos).
+      - **FINAL PANEL (The Legacy):** Symbolic Resolution. Looking at a reflection of younger self, or walking towards a bright horizon. Show growth, not just the event.
+
+      ===========================================================
+      PHASE 3: SCENE & PANEL BREAKDOWN
+      ===========================================================
+      1. Break story into scenes based on EMOTIONAL PACING.
+      2. Panel Count: Range 6 to 12 panels. Use "Breathing Panels" (scenery, silence) between major emotional beats.
+
+      3. OUTFIT LOGIC TABLE (MANDATORY):
+         You MUST generate a 'panelOutfit' for every panel using this logic map.
+         **FASHION ERA: MODERN 2020s** (Unless story specifies a past year).
+         
+         | Scene Context       | Outfit Description                                      |
+         |---------------------|---------------------------------------------------------|
+         | Rejection/Sad       | **Home Clothes**: Hoodie, messy hair, sweatpants, T-shirt (NO food stains) |
+         | Study/Library       | **Clean Casual**: Hoodie, glasses, casual (Exhausted look)|
+         | Campus/Class        | **College Fit**: Tote bag, denim jacket, sneakers, casual |
+         | Work/Internship     | **Smart Casual**: Techwear, Polo shirt, ID Badge, neat jeans |
+         | Signing/Interview   | **Professional**: Blazer, Collared Shirt, Neat Hair     |
+         | Graduation          | **GOWN + CAP** (Check University Branding Lookup)       |
+         | Big Achievement     | **Neat/Modern**: Stylish shirt, confident look          |
+         | Travel/Airport      | **Comfort**: Sweater, jeans, backpack, suitcase         |
+         | Party/Night Out     | **Stylish**: Modern 2020s Fashion, layered, accessories |
+         | Romance             | **Flattering Casual**: Soft textures, nice shirt/blouse |
+
+         RULE: Never repeat the same outfit in unrelated scenes.
+
+      4. TEXT PLACEMENT RULES:
+         - Visual descriptions must allow for HEADROOM.
+         - "Mid-shot with space above head" or "Wide shot with space below".
+
+      ===========================================================
+      PHASE 4: SELF-EVALUATION
+      ===========================================================
+      Check:
+      1. Is the emotion raw? 
+      2. Did I use specific University Colors (e.g. ASU Maroon)?
+      3. Is the outfit correct for the scene?
+      4. Is the background specific (Tesla Lab vs Generic Office)?
+      5. Did I avoid gross messes (food) in sad scenes?
+
+      ===========================================================
+      OUTPUT FORMAT (JSON)
+      ===========================================================
+      Return a JSON object:
+      {
+        "title": "Story Title",
+        "characterIdentityBlocks": [
+           { "name": "Character Name", "identityBlock": "The CIB Text (Physical Traits Only)..." }
+        ],
+        "panels": [
+          {
+            "panelId": 1,
+            "panelOutfit": "Specific outfit description for this panel",
+            "visualDescription": "Detailed visual prompt... MUST start with 'Wearing [panelOutfit]...'",
+            "dialogue": "Speech bubble text (Optional for silent panels)",
+            "speaker": "Speaker Name",
+            "narration": "Internal monologue / Caption"
+          }
+        ]
+      }
+    `;
+
+    inputParts.push({ text: prompt });
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: { parts: inputParts },
+      config: {
+        responseMimeType: "application/json",
+        systemInstruction: "You are a strict creative director. You prioritize visual consistency, real-world accuracy, and DEEP EMOTIONAL IMPACT.",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            characterIdentityBlocks: {
+               type: Type.ARRAY,
+               description: "List of character identity blocks",
+               items: {
+                  type: Type.OBJECT,
+                  properties: {
+                      name: { type: Type.STRING },
+                      identityBlock: { type: Type.STRING }
+                  },
+                  required: ["name", "identityBlock"]
+               }
+            },
+            panels: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  panelId: { type: Type.INTEGER },
+                  panelOutfit: { type: Type.STRING, description: "Mandatory outfit description for this specific panel context" },
+                  visualDescription: { type: Type.STRING },
+                  dialogue: { type: Type.STRING },
+                  speaker: { type: Type.STRING },
+                  narration: { type: Type.STRING },
+                },
+                required: ["panelId", "visualDescription", "panelOutfit"],
               },
-              required: ["panelId", "visualDescription"],
             },
           },
+          required: ["title", "panels", "characterIdentityBlocks"],
         },
-        required: ["title", "panels"],
       },
-    },
+    });
+
+    if (!response.text) throw new Error("Failed to generate script");
+    
+    const result = JSON.parse(response.text);
+    
+    // Transform the Array back to a Map/Record for the app to use
+    const cibs: Record<string, string> = {};
+    if (result.characterIdentityBlocks && Array.isArray(result.characterIdentityBlocks)) {
+        result.characterIdentityBlocks.forEach((item: any) => {
+            if (item.name && item.identityBlock) {
+                cibs[item.name] = item.identityBlock;
+            }
+        });
+    }
+    
+    return {
+      title: result.title,
+      panels: result.panels,
+      characterIdentityBlocks: cibs
+    };
   });
-
-  if (!response.text) {
-    throw new Error("Failed to generate script");
-  }
-
-  return JSON.parse(response.text);
 };
 
-// --- Image Generation ---
+// --- Image Generation (The Illustrator) ---
 
 export const generatePanelImage = async (
   visualDescription: string, 
-  style: ArtStyle,
+  artStyle: ArtStyle,
   mainCharacter?: Character,
-  seed?: number
+  cib?: string, // The fixed anchor text
+  seed?: number,
+  panelOutfit?: string // Passed from the script generator
 ): Promise<string> => {
   
-  const modelName = "gemini-2.5-flash-image"; 
-  
-  // Construct style guidelines based on selection
-  let stylePrompt = "";
-  switch (style) {
-    case 'Manga':
-      stylePrompt = "Modern Manga style, black and white ink with screentones, highly detailed background, dramatic composition.";
-      break;
-    case 'Chibi':
-      stylePrompt = "Chibi style, super deformed, cute, large head ratio, simple shading.";
-      break;
-    case 'Painterly':
-      stylePrompt = "Digital Painterly style, soft brushstrokes, atmospheric lighting, detailed background art.";
-      break;
-    case 'Ghibli':
-      stylePrompt = "Studio Ghibli style, Hayao Miyazaki aesthetic, hand-painted watercolor backgrounds, lush greenery, soft natural lighting, nostalgic atmosphere, clean character lines.";
-      break;
-    case 'Webtoon':
-      stylePrompt = "Premium Webtoon style, crisp lineart, vibrant cel-shading, manhwa aesthetic, vertical format composition, highly detailed backgrounds.";
-      break;
-    case 'Anime':
-    default:
-      stylePrompt = "High-quality Anime art style, Kyoto Animation aesthetic, detailed eyes, cinematic lighting, beautiful scenery.";
-      break;
-  }
-
-  // Identity Block (CIB)
-  let identityBlock = "";
-  if (mainCharacter) {
-    identityBlock = constructCharacterIdentityBlock(mainCharacter);
-  }
-
-  // Base prompt structure
-  const promptText = `
-    ${identityBlock}
-
-    ART STYLE: ${stylePrompt}
+  return retryWithBackoff(async () => {
+    const modelName = "gemini-2.5-flash-image"; 
     
-    SCENE: ${visualDescription}
-    
-    INSTRUCTIONS:
-    - Maintain 100% identity consistency with the reference image (if provided).
-    - Do NOT change the character’s facial structure.
-    - Render in a vertical comic panel format.
-  `;
+    // 1. Style Definition
+    let styleRules = "";
+    switch (artStyle) {
+      case 'Cinematic': styleRules = "Cinematic Realism, 8k resolution, photorealistic textures, dramatic lighting, detailed background, depth of field, movie still aesthetic."; break;
+      case 'Manga': styleRules = "Modern Manga, black and white ink, screentones, dramatic angles, emotional hatching."; break;
+      case 'Ghibli': styleRules = "Studio Ghibli style, hand-painted watercolor backgrounds, lush atmosphere, Hayao Miyazaki aesthetic, emotional skies."; break;
+      case 'Webtoon': styleRules = "Premium Webtoon style, crisp cel-shading, vibrant colors, vertical format, detailed background, expressive eyes."; break;
+      case 'Anime': styleRules = "High-quality Anime, Kyoto Animation style, cinematic lighting, Makoto Shinkai inspired, emotional lens flare."; break;
+      case 'Painterly': styleRules = "Digital painting, soft brushstrokes, atmospheric, semi-realistic, emotional palette."; break;
+      case 'Chibi': styleRules = "Chibi style, cute, super deformed, large heads, expressive."; break;
+    }
 
-  const parts: any[] = [
-    { text: promptText }
-  ];
+    // 2. Construct the Fixed Prompt Template (3-LAYER PIPELINE + EMOTION)
+    const promptText = `
+      CREATE A ${artStyle.toUpperCase()} PANEL.
 
-  if (mainCharacter) {
-    // Add reference image as high priority context
-    parts.push({
-      inlineData: {
-        mimeType: "image/jpeg", 
-        data: mainCharacter.imageBase64
-      }
-    });
-  }
+      ===========================================================
+      LAYER 0: MANDATORY OUTFIT (OVERRIDES EVERYTHING)
+      ===========================================================
+      OUTFIT: ${panelOutfit || "Consistent with scene context"}
+      STYLE DATE: Modern 2020s Fashion. Avoid dated 2000s styles unless requested.
+      
+      CRITICAL: The character MUST be wearing the outfit described above. 
+      IGNORE any clothing details found in the Reference Image.
+      IGNORE any default clothing found in the CIB.
+      Redraw the body/clothes completely to match this outfit.
+      
+      IF OUTFIT SPECIFIES COLORS (e.g. Maroon Gown), YOU MUST USE THOSE COLORS.
 
-  try {
+      ===========================================================
+      LAYER 1: THE ANCHOR (CIB - PHYSICAL TRAITS ONLY)
+      ===========================================================
+      ${cib || "No specific character focus."}
+      
+      MANDATORY: The generated character MUST match the physical description above ≥90%.
+      AGE CONSISTENCY: If the story implies a different age (Childhood, College), adjust proportions but keep facial identity.
+
+      ===========================================================
+      LAYER 2: FACE LOCK (REFERENCE IMAGE)
+      ===========================================================
+      Use the attached reference image(s) as a HARD CONSTRAINT for:
+      - Facial Structure (Jaw, Nose, Eyes)
+      - Skin Tone
+      - Hair Texture
+      - Ethnicity
+      
+      DO NOT USE THE REFERENCE IMAGE FOR CLOTHING. USE IT FOR FACE/HAIR ONLY.
+
+      ===========================================================
+      LAYER 3: SCENE & BACKGROUND
+      ===========================================================
+      SCENE: ${visualDescription}
+      STYLE: ${styleRules}
+
+      RULES:
+      - BACKGROUNDS: Must be detailed and specific to the location (e.g. specific university landmarks, specific cities). Avoid generic blurs.
+      - **NO FOOD, NO TRASH, NO DIRTY DISHES** in background unless scene explicitly asks for a meal.
+      - Keep hairstyle consistent with CIB (unless scene explicitly changes it).
+      - Do NOT alter ethnicity or skin tone.
+      - Vertical portrait ratio.
+      - No text/speech bubbles rendered in the image.
+
+      ===========================================================
+      LAYER 4: ATMOSPHERE & EMOTIONAL LIGHTING (THE "CRY" FACTOR)
+      ===========================================================
+      - IF SCENE IS SAD/STRUGGLE: Use cold color temperature (Blues, Greys). Low key lighting. Harsh shadows or Overcast soft light. Rain on windows. Isolation.
+      - IF SCENE IS HAPPY/SUCCESS: Use warm color temperature (Golden Hour, Sunbeams). High saturation. Lens flares. Sparkles. Bloom.
+      - IF SCENE IS NEUTRAL: Use natural cinematic lighting. Depth of field.
+      
+      EXPRESSIONS: Use micro-expressions. Tears in eyes. Quivering lips. Genuine smiles. Wide-eyed wonder. 
+      Do not make faces generic. Make them feel the weight of the moment.
+      Allow Surreal/Symbolic Elements (Floating letters, split screens) for First/Last panels if requested.
+
+      ===========================================================
+      COMPOSITION & FRAMING (CRITICAL)
+      ===========================================================
+      - **RULE: Character must occupy the LOWER 2/3 of the image.**
+      - **RULE: Upper 1/3 must be empty/negative space (sky, wall, ceiling) for text placement.**
+      - DO NOT place the face in the top 30% of the frame.
+    `;
+
+    const parts: any[] = [{ text: promptText }];
+
+    // 3. Attach the "Face Lock" Reference Image
+    if (mainCharacter) {
+      parts.push({
+        inlineData: {
+          mimeType: mainCharacter.mimeType || "image/jpeg", 
+          data: mainCharacter.imageBase64
+        }
+      });
+    }
+
+    // 4. Call Model
     const response = await ai.models.generateContent({
       model: modelName,
       contents: { parts },
       config: {
-        // Use seed for consistency if provided
-        seed: seed || undefined
+        seed: seed // Use consistent seed for style stability
       }
     });
 
@@ -201,11 +384,6 @@ export const generatePanelImage = async (
             }
         }
     }
-    
-    throw new Error("No image generated in response");
-
-  } catch (error) {
-    console.error("Image generation error:", error);
-    throw error;
-  }
+    throw new Error("No image generated");
+  });
 };

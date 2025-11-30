@@ -16,11 +16,11 @@ interface Props {
 }
 
 const STYLES: { id: ArtStyle; label: string; desc: string }[] = [
+    { id: 'Cinematic', label: 'Cinematic Realism', desc: 'Photorealistic, movie-like quality' },
     { id: 'Webtoon', label: 'Clean Webtoon', desc: 'Crisp lines, vertical scroll ready' },
     { id: 'Ghibli', label: 'Studio Ghibli', desc: 'Hand-painted, whimsical, nostalgic' },
     { id: 'Anime', label: 'Classic Anime', desc: '90s aesthetic, cel-shaded' },
     { id: 'Manga', label: 'Modern Manga', desc: 'B&W, screentones, dramatic' },
-    { id: 'Chibi', label: 'Chibi', desc: 'Cute, small, expressive' },
     { id: 'Painterly', label: 'Painterly Illustration', desc: 'Soft, detailed, artistic' },
 ];
 
